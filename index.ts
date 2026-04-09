@@ -522,32 +522,32 @@ function registerTools(api: any) {
  * 注册钩子
  */
 function registerHooks(api: any) {
-  // 消息处理钩子 - 解析自然语言意图
-  api.registerHook({
-    name: 'onMessage',
-    handler: async (event: any, ctx: any) => {
-      // 兼容处理：event 可能是字符串或对象
-      const message = typeof event === 'string' ? event : (typeof event === 'object' && event !== null ? event.content || event.message || String(event) : String(event));
-      const agentId = ctx.agentId || 'default';
-      const nlpHandler = nlpHandlers.get(agentId);
+  // OpenClaw 4.10+ API: registerHook("eventName", handler)
+  // onMessage 事件会传递 (channelName, user, text, msg)
+  api.registerHook('onMessage', async (text: string, user: string, channelName: string, msg: any) => {
+    if (!text || typeof text !== 'string') {
+      return null; // 没有有效文本，不拦截
+    }
 
-      if (!nlpHandler) {
-        return null; // 不拦截，继续处理
-      }
+    const agentId = msg?.agentId || 'default';
+    const nlpHandler = nlpHandlers.get(agentId);
 
-      const intent = nlpHandler.parse(message);
+    if (!nlpHandler) {
+      return null; // 不拦截，继续处理
+    }
 
-      // 如果置信度较低，不拦截
-      if (intent.confidence < 0.6) {
-        return null;
-      }
+    const intent = nlpHandler.parse(text);
 
-      // 处理已知意图
-      return handleIntent(intent, api, agentId);
-    },
+    // 如果置信度较低，不拦截
+    if (intent.confidence < 0.6) {
+      return null;
+    }
+
+    // 处理已知意图
+    return handleIntent(intent, api, agentId);
   });
 
-  console.log('[Odoo Plugin] 钩子已注册');
+  console.log('[Odoo Plugin] 钩子已注册（onMessage hook）');
 }
 
 /**
