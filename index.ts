@@ -606,7 +606,6 @@ async function handleIntent(intent: IntentResult, api: any, agentId: string): Pr
       case 'search.contact': {
         const result = await client.searchRead('res.partner', [
           ['name', 'ilike', intent.entities.term as string],
-          ['company_type', '=', 'company'],
         ], ['id', 'name', 'phone', 'email'], { limit: 10 });
         if (result.records.length === 0) {
           return { content: `未找到客户：${intent.entities.term}` };

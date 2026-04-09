@@ -1,6 +1,6 @@
 {
   "name": "@huo15/openclaw-odoo-dev",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "火一五·辉火云企业套件（Odoo 19）龙虾插件 — 自然语言操作Odoo、通知同步、待办管理",
   "type": "module",
   "main": "index.ts",
