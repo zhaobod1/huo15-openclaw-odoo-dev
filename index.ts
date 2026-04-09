@@ -16,6 +16,7 @@ import { definePluginEntry } from 'openclaw/plugin-sdk/plugin-entry';
 import { OdooClient } from './src/modules/odoo-client.js';
 import { NLPUtils } from './src/modules/nlp-handler.js';
 import { NotificationPoller } from './src/modules/notification-poller.js';
+import { ConfigManager } from './src/modules/config-manager.js';
 import type { OdooPluginConfig, SyncUpdate, IntentResult } from './src/types/index.js';
 
 // 存储已认证的 Odoo 客户端
@@ -24,6 +25,8 @@ const nlpHandlers = new Map<string, NLPUtils>();
 const pollers = new Map<string, NotificationPoller>();
 
 // 插件状态
+const configManager = new ConfigManager();
+
 const pluginState = {
   getStatus(agentId: string = 'default') {
     const client = odooClients.get(agentId);
@@ -38,8 +41,14 @@ const pluginState = {
 
   async configure(api: any, config: OdooPluginConfig, agentId: string = 'default') {
     if (config.odoo) {
+      // 保存配置
+      configManager.saveOdooConfig(config.odoo);
       await initOdooClient(api, config.odoo, agentId);
     }
+  },
+
+  loadSavedConfig(): OdooPluginConfig | null {
+    return configManager.load();
   },
 };
 
@@ -56,6 +65,15 @@ export default definePluginEntry({
       initOdooClient(api, config.odoo).catch(err => {
         console.error('[Odoo Plugin] 初始化失败:', err);
       });
+    } else {
+      // 尝试加载保存的配置
+      const savedConfig = pluginState.loadSavedConfig();
+      if (savedConfig?.odoo) {
+        console.log('[Odoo Plugin] 发现保存的 Odoo 配置，正在连接...');
+        initOdooClient(api, savedConfig.odoo).catch(err => {
+          console.error('[Odoo Plugin] 恢复连接失败:', err);
+        });
+      }
     }
 
     // 注册工具
@@ -507,7 +525,9 @@ function registerHooks(api: any) {
   // 消息处理钩子 - 解析自然语言意图
   api.registerHook({
     name: 'onMessage',
-    handler: async (message: string, ctx: any) => {
+    handler: async (event: any, ctx: any) => {
+      // 兼容处理：event 可能是字符串或对象
+      const message = typeof event === 'string' ? event : (typeof event === 'object' && event !== null ? event.content || event.message || String(event) : String(event));
       const agentId = ctx.agentId || 'default';
       const nlpHandler = nlpHandlers.get(agentId);
 
@@ -621,6 +641,164 @@ async function handleIntent(intent: IntentResult, api: any, agentId: string): Pr
         const list = result.records.map((o: any, i: number) => `${i + 1}. ${o.name}`).join('\n');
         return {
           content: `💰 商机列表：\n${list}`,
+        };
+      }
+
+      case 'crm.opportunity.create': {
+        const name = intent.entities.partnerName as string || '新商机';
+        const leadId = await client.create('crm.lead', {
+          name,
+          type: 'opportunity',
+          active: true,
+        });
+        return {
+          content: `✅ 已创建商机「${name}」，ID: ${leadId}`,
+        };
+      }
+
+      case 'crm.lead.list': {
+        const result = await client.searchRead('crm.lead', [
+          ['type', '=', 'lead'],
+          ['active', '=', true],
+        ], ['id', 'name', 'partner_id', 'stage_id'], { limit: 20 });
+        if (result.records.length === 0) {
+          return { content: '您目前没有线索' };
+        }
+        const list = result.records.map((l: any, i: number) => `${i + 1}. ${l.name}`).join('\n');
+        return {
+          content: `📝 线索列表：\n${list}`,
+        };
+      }
+
+      case 'crm.lead.create': {
+        const name = intent.entities.partnerName as string || '新线索';
+        const contact = intent.entities.contact as { name?: string; phone?: string; email?: string } || {};
+        const leadId = await client.create('crm.lead', {
+          name,
+          type: 'lead',
+          contact_name: contact.name,
+          phone: contact.phone,
+          email_from: contact.email,
+          active: true,
+        });
+        return {
+          content: `✅ 已创建线索「${name}」，ID: ${leadId}`,
+        };
+      }
+
+      case 'sale.order.list': {
+        const result = await client.searchRead('sale.order', [
+          ['state', 'not in', ['cancel']],
+        ], ['id', 'name', 'partner_id', 'date_order', 'amount_total', 'state'], { limit: 20 });
+        if (result.records.length === 0) {
+          return { content: '您目前没有销售订单' };
+        }
+        const list = result.records.map((o: any, i: number) => 
+          `${i + 1}. ${o.name} - ${o.partner_id?.[1] || '未知客户'} - ¥${o.amount_total || 0} - ${o.state}`
+        ).join('\n');
+        return {
+          content: `📦 销售订单列表：\n${list}`,
+        };
+      }
+
+      case 'purchase.order.list': {
+        const result = await client.searchRead('purchase.order', [
+          ['state', 'not in', ['cancel']],
+        ], ['id', 'name', 'partner_id', 'date_order', 'amount_total', 'state'], { limit: 20 });
+        if (result.records.length === 0) {
+          return { content: '您目前没有采购订单' };
+        }
+        const list = result.records.map((o: any, i: number) => 
+          `${i + 1}. ${o.name} - ${o.partner_id?.[1] || '未知供应商'} - ¥${o.amount_total || 0} - ${o.state}`
+        ).join('\n');
+        return {
+          content: `🛒 采购订单列表：\n${list}`,
+        };
+      }
+
+      case 'stock.inventory': {
+        const term = intent.entities.term as string || '';
+        const domain: any = [];
+        if (term) {
+          domain.push(['product_id.name', 'ilike', term]);
+        }
+        const result = await client.searchRead('stock.quant', domain, 
+          ['id', 'product_id', 'quantity', 'location_id'], 
+          { limit: 20 }
+        );
+        if (result.records.length === 0) {
+          return { content: '未找到相关库存记录' };
+        }
+        const list = result.records.map((q: any, i: number) => 
+          `${i + 1}. ${q.product_id?.[1] || '未知产品'} - 数量: ${q.quantity} - 位置: ${q.location_id?.[1] || '未知'}`
+        ).join('\n');
+        return {
+          content: `📦 库存查询结果：\n${list}`,
+        };
+      }
+
+      case 'project.timesheet.list': {
+        const uid = client.getUid() || 0;
+        const result = await client.searchRead('account.analytic.line', [
+          ['user_id', '=', uid],
+        ], ['id', 'name', 'unit_amount', 'date', 'project_id'], { limit: 20 });
+        if (result.records.length === 0) {
+          return { content: '您目前没有工时记录' };
+        }
+        const list = result.records.map((t: any, i: number) => 
+          `${i + 1}. ${t.name || '无描述'} - ${t.unit_amount}h - ${t.date} - ${t.project_id?.[1] || '未知项目'}`
+        ).join('\n');
+        return {
+          content: `⏱️ 工时记录：\n${list}`,
+        };
+      }
+
+      case 'project.task.recordHours': {
+        const hours = intent.entities.hours as number || 1;
+        const description = intent.entities.description as string || '工时记录';
+        const timesheetId = await client.create('account.analytic.line', {
+          name: description,
+          unit_amount: hours,
+          date: new Date().toISOString().split('T')[0],
+          user_id: client.getUid() || 1,
+        });
+        return {
+          content: `✅ 已记录工时 ${hours} 小时，ID: ${timesheetId}`,
+        };
+      }
+
+      case 'todo.done': {
+        const taskName = intent.entities.taskName as string;
+        if (!taskName) {
+          return { content: '请指定要完成的待办名称' };
+        }
+        const tasks = await client.searchRead('project.task', [
+          ['name', 'ilike', taskName],
+          ['active', '=', true],
+        ], ['id', 'name'], { limit: 1 });
+        if (tasks.records.length === 0) {
+          return { content: `未找到待办：${taskName}` };
+        }
+        await client.write('project.task', [tasks.records[0].id as number], { active: false });
+        return {
+          content: `✅ 已完成待办「${taskName}」`,
+        };
+      }
+
+      case 'todo.delete': {
+        const taskName = intent.entities.taskName as string;
+        if (!taskName) {
+          return { content: '请指定要删除的待办名称' };
+        }
+        const tasks = await client.searchRead('project.task', [
+          ['name', 'ilike', taskName],
+        ], ['id', 'name'], { limit: 1 });
+        if (tasks.records.length === 0) {
+          return { content: `未找到待办：${taskName}` };
+        }
+        await client.unlink('project.task', [tasks.records[0].id as number]);
+        return {
+          content: `✅ 已删除待办「${taskName}」`,
         };
       }
 

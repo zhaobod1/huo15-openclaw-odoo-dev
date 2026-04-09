@@ -1,24 +1,24 @@
 /**
- * 自然语言意图理解处理器
- * 
- * 将用户的自然语言指令解析为 Odoo 操作意图
+ * 自然语言意图理解处理器 v2
  * 
  * 支持的意图类型：
  * - todo.create: 创建待办
  * - todo.list: 查看待办列表
- * - todo.update: 更新待办
+ * - todo.done: 标记待办完成
  * - todo.delete: 删除待办
  * - activity.create: 创建活动提醒
  * - calendar.create: 创建日历事件
  * - message.send: 发送消息
  * - email.send: 发送邮件
  * - search: 搜索记录
- * - report: 生成报表
+ * - crm.*: CRM 相关操作
+ * - sale.*: 销售相关操作
+ * - stock.*: 库存相关操作
  */
 
 import type { IntentResult, IntentPattern } from '../types/index.js';
 
-// 内置意图模式
+// 内置意图模式 v2（更智能的模式匹配）
 const BUILTIN_PATTERNS: IntentPattern[] = [
   // ========== 待办相关 ==========
   {
@@ -28,7 +28,7 @@ const BUILTIN_PATTERNS: IntentPattern[] = [
     method: 'create',
   },
   {
-    pattern: '(帮我|给我)?(创建|新建|添加|加一个)(个)?任务',
+    pattern: '(帮我|给我)?(创建|新建|添加)(个)?任务',
     intent: 'todo.create',
     model: 'project.task',
     method: 'create',
@@ -58,10 +58,16 @@ const BUILTIN_PATTERNS: IntentPattern[] = [
     method: 'write',
   },
   {
-    pattern: '删除(.+?)待办',
+    pattern: '(帮我|给我)?(删除|删掉)(.+?)待办',
     intent: 'todo.delete',
     model: 'project.task',
     method: 'unlink',
+  },
+  {
+    pattern: '(帮我|给我)?(更新|修改)(.+?)待办',
+    intent: 'todo.update',
+    model: 'project.task',
+    method: 'write',
   },
 
   // ========== 日历/活动相关 ==========
@@ -72,8 +78,14 @@ const BUILTIN_PATTERNS: IntentPattern[] = [
     method: 'create',
   },
   {
-    pattern: '(明天|今天|后天|下周|这周)(.+?)提醒我',
-    intent: 'calendar.create.withDate',
+    pattern: '(明天|今天|后天|下周|这周)(.+?)(上午|下午|早上|晚上)(.+?)提醒我',
+    intent: 'calendar.create.specificTime',
+    model: 'calendar.event',
+    method: 'create',
+  },
+  {
+    pattern: '(明天下午|今天下午|后天上午|下周|这周)([0-9]|一|二|三|四|五|六|日)点',
+    intent: 'calendar.create.specificTime',
     model: 'calendar.event',
     method: 'create',
   },
@@ -82,12 +94,6 @@ const BUILTIN_PATTERNS: IntentPattern[] = [
     intent: 'calendar.list',
     model: 'calendar.event',
     method: 'search_read',
-  },
-  {
-    pattern: '(明天|今天|后天|下周|这周)(.+?)有个?(.+?)会议',
-    intent: 'calendar.create',
-    model: 'calendar.event',
-    method: 'create',
   },
 
   // ========== 消息/邮件相关 ==========
@@ -163,6 +169,38 @@ const BUILTIN_PATTERNS: IntentPattern[] = [
     model: 'crm.lead',
     method: 'search_read',
   },
+  {
+    pattern: '(帮我|给我)?(新建|创建)(一个)?线索',
+    intent: 'crm.lead.create',
+    model: 'crm.lead',
+    method: 'create',
+  },
+  {
+    pattern: '(帮我|给我)?(查看|看看)(我的)?线索',
+    intent: 'crm.lead.list',
+    model: 'crm.lead',
+    method: 'search_read',
+  },
+
+  // ========== 销售订单相关 ==========
+  {
+    pattern: '(帮我|给我)?(查看|看看|显示)(我的)?报价单',
+    intent: 'sale.order.list',
+    model: 'sale.order',
+    method: 'search_read',
+  },
+  {
+    pattern: '(帮我|给我)?(创建|新建)(一个)?报价单',
+    intent: 'sale.order.create',
+    model: 'sale.order',
+    method: 'create',
+  },
+  {
+    pattern: '(帮我|给我)?(查看|看看)(我的)?销售订单',
+    intent: 'sale.order.list',
+    model: 'sale.order',
+    method: 'search_read',
+  },
 
   // ========== 库存相关 ==========
   {
@@ -171,16 +209,42 @@ const BUILTIN_PATTERNS: IntentPattern[] = [
     model: 'stock.quant',
     method: 'search_read',
   },
+  {
+    pattern: '(帮我|给我)?(查看|看看)(我的)?采购订单',
+    intent: 'purchase.order.list',
+    model: 'purchase.order',
+    method: 'search_read',
+  },
+
+  // ========== 工时相关 ==========
+  {
+    pattern: '(帮我|给我)?(记录|添加)(.+?)工时',
+    intent: 'project.task.recordHours',
+    model: 'account.analytic.line',
+    method: 'create',
+  },
+  {
+    pattern: '(帮我|给我)?(查看|看看)(我的)?工时',
+    intent: 'project.timesheet.list',
+    model: 'account.analytic.line',
+    method: 'search_read',
+  },
 ];
 
 /**
- * 从文本中提取日期时间
+ * 从文本中提取日期时间（支持更多格式）
  */
-function extractDateTime(text: string): { date: string | null; time: string | null; relative: string | null } {
+function extractDateTime(text: string): { 
+  date: string | null; 
+  time: string | null; 
+  relative: string | null;
+  timeOfDay: string | null;
+} {
   const result = {
     date: null as string | null,
     time: null as string | null,
     relative: null as string | null,
+    timeOfDay: null as string | null,
   };
 
   // 相对时间
@@ -194,12 +258,34 @@ function extractDateTime(text: string): { date: string | null; time: string | nu
     result.relative = 'next week';
   } else if (text.includes('这周')) {
     result.relative = 'this week';
+  } else if (text.includes('下个月')) {
+    result.relative = 'next month';
+  }
+
+  // 时段
+  if (text.includes('上午') || text.includes('早上') || text.includes('早晨')) {
+    result.timeOfDay = 'morning';
+  } else if (text.includes('下午')) {
+    result.timeOfDay = 'afternoon';
+  } else if (text.includes('晚上') || text.includes('傍晚')) {
+    result.timeOfDay = 'evening';
+  } else if (text.includes('中午')) {
+    result.timeOfDay = 'noon';
   }
 
   // 时间匹配 (HH:MM)
-  const timeMatch = text.match(/(\d{1,2}):(\d{2})/);
+  const timeMatch = text.match(/([0-9]|一|二|三|四|五|六|日){1,2}点([0-9]{1,2})?分?/);
   if (timeMatch) {
-    result.time = `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`;
+    const hourMap: Record<string, number> = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '日': 7, '天': 7 };
+    let hour = parseInt(timeMatch[1]) || hourMap[timeMatch[1]] || 9;
+    const minute = timeMatch[2] ? parseInt(timeMatch[2]) : 0;
+    result.time = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+  }
+
+  // 标准时间格式
+  const stdTimeMatch = text.match(/(\d{1,2}):(\d{2})/);
+  if (stdTimeMatch) {
+    result.time = `${stdTimeMatch[1].padStart(2, '0')}:${stdTimeMatch[2]}`;
   }
 
   // 日期匹配 (YYYY-MM-DD)
@@ -215,7 +301,7 @@ function extractDateTime(text: string): { date: string | null; time: string | nu
  * 从文本中提取优先级
  */
 function extractPriority(text: string): '0' | '1' {
-  const urgentKeywords = ['紧急', '重要', '急', '马上', '立刻', '优先'];
+  const urgentKeywords = ['紧急', '重要', '急', '马上', '立刻', '优先', '加急'];
   const lowKeywords = ['不急', '慢慢来', '有空再', '低优先级'];
 
   for (const kw of urgentKeywords) {
@@ -229,7 +315,18 @@ function extractPriority(text: string): '0' | '1' {
 }
 
 /**
- * 自然语言处理器
+ * 从文本中提取金额
+ */
+function extractAmount(text: string): number | null {
+  const match = text.match(/([¥￥$]?\s*[\d,]+(?:\.\d{2})?)/);
+  if (match) {
+    return parseFloat(match[1].replace(/[¥￥$,]/g, ''));
+  }
+  return null;
+}
+
+/**
+ * 自然语言处理器 v2
  */
 export class NLPUtils {
   private patterns: IntentPattern[];
@@ -242,15 +339,20 @@ export class NLPUtils {
    * 解析用户输入，返回意图结果
    */
   parse(input: string): IntentResult {
-    const text = input.trim();
+    const text = typeof input === 'string' ? input.trim() : String(input).trim();
 
     for (const pattern of this.patterns) {
-      const regex = new RegExp(pattern.pattern, 'i');
-      const match = regex.exec(text);
+      try {
+        const regex = new RegExp(pattern.pattern, 'i');
+        const match = regex.exec(text);
 
-      if (match) {
-        const result = this.buildIntent(pattern, match, text);
-        return result;
+        if (match) {
+          const result = this.buildIntent(pattern, match, text);
+          return result;
+        }
+      } catch (e) {
+        // 正则表达式错误，跳过此模式
+        console.warn(`[NLP] Pattern error: ${pattern.pattern}`, e);
       }
     }
 
@@ -262,7 +364,6 @@ export class NLPUtils {
    * 构建意图结果
    */
   private buildIntent(pattern: IntentPattern, match: RegExpExecArray, text: string): IntentResult {
-    const groups = match.groups || {};
     const entities: Record<string, unknown> = {};
 
     // 提取日期时间
@@ -270,6 +371,7 @@ export class NLPUtils {
     if (dateTime.date) entities.date = dateTime.date;
     if (dateTime.time) entities.time = dateTime.time;
     if (dateTime.relative) entities.relative = dateTime.relative;
+    if (dateTime.timeOfDay) entities.timeOfDay = dateTime.timeOfDay;
 
     // 提取优先级
     entities.priority = extractPriority(text);
@@ -296,8 +398,9 @@ export class NLPUtils {
         break;
 
       case 'calendar.create':
-      case 'calendar.create.withDate':
+      case 'calendar.create.specificTime':
         entities.eventName = this.extractContent(text, ['会议', '日程', '活动', '提醒'], match[0]);
+        entities.description = entities.eventName;
         break;
 
       case 'todo.done':
@@ -306,6 +409,27 @@ export class NLPUtils {
 
       case 'todo.delete':
         entities.taskName = this.extractTaskName(text);
+        break;
+
+      case 'todo.update':
+        entities.taskName = this.extractTaskName(text);
+        entities.updateContent = this.extractUpdateContent(text);
+        break;
+
+      case 'create.partner':
+      case 'crm.lead.create':
+      case 'crm.opportunity.create':
+        entities.partnerName = this.extractPartnerName(text);
+        entities.contact = this.extractContact(text);
+        break;
+
+      case 'sale.order.create':
+        entities.amount = extractAmount(text);
+        break;
+
+      case 'project.task.recordHours':
+        entities.hours = this.extractHours(text);
+        entities.description = this.extractContent(text, ['工时', '时间', '小时'], match[0]);
         break;
     }
 
@@ -336,17 +460,26 @@ export class NLPUtils {
       result = result.replace(kw, '');
     }
 
-    return result.trim() || '新待办';
+    // 清理多余空白
+    result = result.replace(/\s+/g, ' ').trim();
+
+    return result || '新待办';
   }
 
   /**
    * 提取收件人
    */
   private extractRecipient(text: string): string {
-    const match = text.match(/给(.+?)(さん|总|先生|女士|姐|哥|)/);
+    const match = text.match(/给(.+?)(的话|一下|发送|发|邮件|消息|封信)/);
     if (match) {
       return match[1].trim();
     }
+    
+    const altMatch = text.match(/发送给(.+?)([，。]|$)/);
+    if (altMatch) {
+      return altMatch[1].trim();
+    }
+    
     return '';
   }
 
@@ -354,13 +487,12 @@ export class NLPUtils {
    * 提取主题
    */
   private extractSubject(text: string): string {
-    const match = text.match(/主题[:：]?(.+?)(?=\s|$|[,，])/);
+    const match = text.match(/主题[:：]?(.+?)(?=\s|[,，]|$)/);
     if (match) {
       return match[1].trim();
     }
 
-    // 提取"关于xxx"的内容
-    const aboutMatch = text.match(/关于(.+?)(?=\s|$|[,，])/);
+    const aboutMatch = text.match(/关于(.+?)(?=\s|[,，]|$)/);
     if (aboutMatch) {
       return aboutMatch[1].trim();
     }
@@ -372,7 +504,7 @@ export class NLPUtils {
    * 提取正文
    */
   private extractBody(text: string): string {
-    // 提取引号或括号内的内容
+    // 提取引号内内容
     const quoteMatch = text.match(/["'""](.+?)["'""]/);
     if (quoteMatch) {
       return quoteMatch[1];
@@ -403,22 +535,21 @@ export class NLPUtils {
       result = result.replace(p, '');
     }
 
-    // 移除"客户"、"联系人"等关键词
-    result = result.replace(/客户|联系人|商机/g, '');
+    // 移除"客户"、"联系人"、"商机"等关键词
+    result = result.replace(/客户|联系人|商机|线索/g, '');
 
-    return result.trim();
+    return result.replace(/\s+/g, ' ').trim();
   }
 
   /**
-   * 提取任务名称（用于完成/删除）
+   * 提取任务名称
    */
   private extractTaskName(text: string): string {
-    const match = text.match(/(?:完成|标记完成|做完了|删除)(.+?)(?:待办|任务)/);
+    const match = text.match(/(?:完成|标记完成|做完了|删除|更新|修改)(.+?)(?:待办|任务)/);
     if (match) {
       return match[1].trim();
     }
 
-    // 提取引号内内容
     const quoteMatch = text.match(/["'""](.+?)["'""]/);
     if (quoteMatch) {
       return quoteMatch[1];
@@ -428,6 +559,69 @@ export class NLPUtils {
   }
 
   /**
+   * 提取更新内容
+   */
+  private extractUpdateContent(text: string): string {
+    const match = text.match(/更新为(.+?)(?:$|[，,])|修改为(.+?)(?:$|[，,])/);
+    if (match) {
+      return (match[1] || match[2] || '').trim();
+    }
+    return '';
+  }
+
+  /**
+   * 提取客户名称
+   */
+  private extractPartnerName(text: string): string {
+    const match = text.match(/(?:客户|公司|企业)(?:名称)?[:：]?(.+?)(?:[，,]|$)/);
+    if (match) {
+      return match[1].trim();
+    }
+
+    // 提取引号或括号内内容
+    const quoteMatch = text.match(/["'""](.+?)["'""]/);
+    if (quoteMatch) {
+      return quoteMatch[1];
+    }
+
+    return '';
+  }
+
+  /**
+   * 提取联系人
+   */
+  private extractContact(text: string): { name?: string; phone?: string; email?: string } {
+    const contact: { name?: string; phone?: string; email?: string } = {};
+    
+    const nameMatch = text.match(/(?:联系人|联系|对接人)[:：]?(.+?)(?:[，,\s]|$)/);
+    if (nameMatch) {
+      contact.name = nameMatch[1].trim();
+    }
+
+    const phoneMatch = text.match(/电话[:：]?(\d+[-\d]{7,})/);
+    if (phoneMatch) {
+      contact.phone = phoneMatch[1];
+    }
+
+    const emailMatch = text.match(/邮箱[:：]?([^\s，,]+@[^\s，,]+)/);
+    if (emailMatch) {
+      contact.email = emailMatch[1];
+    }
+
+    return contact;
+  }
+
+  /**
+   * 提取工时
+   */
+  private extractHours(text: string): number {
+    const match = text.match(/(\d+(?:\.\d+)?)\s*(?:小时|工时|h|H)/);
+    if (match) {
+      return parseFloat(match[1]);
+    }
+    return 1;
+  }
+
   /**
    * 备用搜索意图
    */
