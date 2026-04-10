@@ -10,6 +10,13 @@ export interface OdooConfig {
   password: string;
 }
 
+/** 单用户级 Odoo 配置（按 agentId 隔离） */
+export interface UserOdooConfig {
+  agentId: string;
+  odoo: OdooConfig;
+  configuredAt: number; // 时间戳
+}
+
 /** Odoo 会话信息 */
 export interface OdooSession {
   uid: number;
@@ -104,14 +111,17 @@ export interface SyncUpdate {
   timestamp: number;
 }
 
-/** 插件配置 */
+/** 插件配置（新版多用户） */
 export interface OdooPluginConfig {
-  odoo?: OdooConfig;
+  /** 每个用户的 Odoo 配置，按 agentId 隔离 */
+  users?: Record<string, UserOdooConfig>;
+  /** 全局同步配置 */
   sync?: {
     enabled: boolean;
     intervalSeconds: number;
     channels: string[];
   };
+  /** NLP 配置 */
   nlp?: {
     enabled: boolean;
     intentPatterns?: IntentPattern[];

@@ -25,7 +25,7 @@
 
 > OpenClaw 插件 — 自然语言操作辉火云企业套件（Odoo 19）、通知同步、待办管理、活动提醒
 
-**版本：** 0.1.0
+**版本：** 0.3.0（多用户隔离版）
 
 ---
 
@@ -52,18 +52,24 @@
 - 📧 邮件通知
 - 📅 日历事件
 
-### 🛠️ 完整工具集
+### 👥 多用户隔离（核心特性）
 
-| 工具 | 说明 |
-|------|------|
-| odoo_connect | 连接 Odoo 系统 |
-| odoo_create_task | 创建待办任务 |
-| odoo_list_tasks | 获取待办列表 |
-| odoo_create_event | 创建日历事件 |
-| odoo_create_activity | 创建活动提醒 |
-| odoo_search | 通用记录搜索 |
-| odoo_send_message | 发送消息 |
-| odoo_status | 获取连接状态 |
+**每个用户有独立的 Odoo 配置，数据完全隔离：**
+
+- 每个用户（agentId）独立存储配置
+- 首次操作时自动引导配置
+- 用户间配置互不影响
+- 参考企微插件（dingtalk）的动态 Agent 模式
+
+### 🛡️ 安全机制
+
+⚠️ **当前版本**：密码明文存储在 `~/.openclaw/plugin-configs/odoo-config.json`
+
+**后续升级计划（TODO）**：改用 OpenClaw SecretInput 机制
+- 支持 env 环境变量引用
+- 支持 file 文件加密存储
+- 支持 exec 命令动态获取
+- 完全兼容企微插件的凭证管理方式
 
 ---
 
@@ -85,6 +91,28 @@ openclaw plugins install -l .
 
 ---
 
+## 首次使用
+
+用户首次操作 Odoo 时，插件会自动引导配置：
+
+```
+用户：帮我查一下销售订单
+助手：🔔 首次使用 Odoo 插件，需要先配置连接信息
+
+请提供以下信息：
+1. 系统地址（URL）- 如：https://www.huo15.com
+2. 数据库名称（db）- 如：huo15
+3. 用户名（username）- 您的登录账号
+4. 密码（password）- 您的登录密码
+
+输入示例：
+"连接 Odoo，地址 https://www.huo15.com，数据库 huo15，用户名 admin@huo15.com，密码 xxx"
+```
+
+配置成功后，后续操作无需重复输入。
+
+---
+
 ## 配置
 
 ### 插件配置（openclaw.plugin.json）
@@ -95,15 +123,6 @@ openclaw plugins install -l .
   "name": "火一五·辉火云企业套件插件",
   "configSchema": {
     "properties": {
-      "odoo": {
-        "type": "object",
-        "properties": {
-          "url": "https://www.huo15.com",
-          "db": "huo15",
-          "username": "your@email.com",
-          "password": "your-password"
-        }
-      },
       "sync": {
         "type": "object",
         "properties": {
@@ -117,49 +136,46 @@ openclaw plugins install -l .
 }
 ```
 
-### 首次连接
+### 本地配置存储
 
-用户也可以通过聊天命令首次连接：
-
+每个用户的配置保存在：
 ```
-帮我连接 Odoo
-- URL: https://www.huo15.com
-- 数据库: huo15
-- 账号: your@email.com
-- 密码: your-password
+~/.openclaw/plugin-configs/odoo-config.json
 ```
 
----
-
-## 支持的 Odoo 模型
-
-### 常用模型
-
-| 模型 | 说明 | 支持操作 |
-|------|------|----------|
-| project.task | 待办任务 | CRUD |
-| calendar.event | 日历事件 | CRUD |
-| mail.activity | 活动提醒 | CRUD |
-| mail.message | 消息 | CRUD |
-| res.partner | 联系人/客户 | CRUD |
-| project.project | 项目 | CRUD |
-| crm.lead | 商机/线索 | CRUD |
-
-### 扩展模型
-
-| 模型 | 说明 |
-|------|------|
-| sale.order | 销售订单 |
-| purchase.order | 采购订单 |
-| stock.quant | 库存 |
-| account.move | 财务凭证 |
-| hr.employee | 员工 |
+配置结构（多用户版）：
+```json
+{
+  "users": {
+    "agentId_1": {
+      "agentId": "agentId_1",
+      "odoo": {
+        "url": "https://www.huo15.com",
+        "db": "huo15",
+        "username": "user1@huo15.com",
+        "password": "xxx"
+      },
+      "configuredAt": 1712700000000
+    },
+    "agentId_2": {
+      "agentId": "agentId_2",
+      "odoo": {
+        "url": "https://www.huo15.com",
+        "db": "huo15",
+        "username": "user2@huo15.com",
+        "password": "yyy"
+      },
+      "configuredAt": 1712800000000
+    }
+  }
+}
+```
 
 ---
 
 ## 工作流程
 
-### 1. 首次配置
+### 1. 首次配置（自动引导）
 
 ```
 用户：帮我连接辉火云
@@ -200,7 +216,16 @@ openclaw plugins install -l .
 ┌─────────────────────────────────────────────────────────┐
 │                     OpenClaw                            │
 │  ┌─────────────────────────────────────────────────┐    │
-│  │              odoo-dev 插件                       │    │
+│  │              odoo-dev 插件（多用户版）            │    │
+│  │                                                  │    │
+│  │  ┌─────────────────────────────────────────┐    │    │
+│  │  │     多用户隔离层（agentId = userId）      │    │    │
+│  │  │                                          │    │    │
+│  │  │  agent A → [config A] → [client A]      │    │    │
+│  │  │  agent B → [config B] → [client B]      │    │    │
+│  │  │  agent C → [config C] → [client C]      │    │    │
+│  │  └─────────────────────────────────────────┘    │    │
+│  │                                                   │    │
 │  │  ┌─────────────┐  ┌──────────────┐              │    │
 │  │  │ NLP 处理器  │  │ 通知轮询器    │              │    │
 │  │  │             │  │              │              │    │
@@ -238,18 +263,23 @@ openclaw plugins install -l .
 
 ```
 huo15-openclaw-odoo-dev/
-├── index.ts                    # 插件入口
+├── index.ts                    # 插件入口（多用户版）
 ├── package.json                # 项目配置
 ├── openclaw.plugin.json        # 插件清单
 ├── README.md                   # 本文件
+├── SKILL.md                    # 技能说明
 └── src/
     ├── index.ts                # 入口导出
     ├── types/
-    │   └── index.ts            # 类型定义
+    │   └── index.ts            # 类型定义（多用户配置）
+    ├── config/
+    │   └── accounts.ts        # 多账号解析（企微同款）
     └── modules/
         ├── odoo-client.ts       # Odoo API 客户端
+        ├── config-manager.ts    # 配置管理器（多用户版）
         ├── nlp-handler.ts       # 自然语言处理器
-        └── notification-poller.ts # 通知轮询器
+        ├── notification-poller.ts # 通知轮询器
+        └── onboarding.ts        # 首次配置引导
 ```
 
 ---
@@ -274,22 +304,38 @@ openclaw gateway start
 插件会在控制台输出日志：
 
 ```
-[Odoo Plugin] 插件已加载
-[Odoo Plugin] 已连接到 Odoo，用户ID: 5
+[Odoo Plugin] 插件已加载（多用户隔离版）
 [Odoo Plugin] 工具已注册
 [Odoo Plugin] 钩子已注册
+[Odoo Plugin] 已连接到 Odoo（用户: agentId_1），UID: 5
 ```
+
+---
+
+## 安全升级计划（TODO）
+
+| 阶段 | 内容 | 状态 |
+|------|------|------|
+| Phase 1 | 当前版本明文存储 | ✅ 已完成 |
+| Phase 2 | 升级为 SecretInput 机制 | TODO |
+| Phase 3 | 支持 env 环境变量引用 | TODO |
+| Phase 4 | 支持 file 文件加密存储 | TODO |
+| Phase 5 | 支持 exec 命令动态获取 | TODO |
 
 ---
 
 ## TODO
 
+- [x] 多用户隔离架构
+- [x] 首次配置自动引导
+- [x] 多账号解析模块（企微同款）
 - [ ] 支持 WebSocket 实时通知（替代轮询）
 - [ ] 支持更多 Odoo 模型的操作
 - [ ] 支持 Odoo Workflow 审批流
 - [ ] 支持仪表盘数据查询
 - [ ] 支持报表生成
 - [ ] 支持附件上传/下载
+- [ ] 升级为 SecretInput 安全存储
 - [ ] 多语言国际化（中文/英文）
 
 ---
@@ -298,6 +344,8 @@ openclaw gateway start
 
 | 版本 | 日期 | 更新内容 |
 |------|------|----------|
+| 0.3.0 | 2026-04-10 | **多用户隔离版** - 每个用户独立配置，企微同款架构，首次操作自动引导配置 |
+| 0.2.1 | 2026-04-09 | 支持 NLP 意图识别，30+ 意图模式 |
 | 0.1.0 | 2026-04-10 | 首次发布，支持基础 CRUD 和通知同步 |
 
 ---

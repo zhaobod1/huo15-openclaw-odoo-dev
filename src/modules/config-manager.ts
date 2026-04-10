@@ -1,7 +1,11 @@
 /**
- * Odoo 插件配置管理器
- * 
+ * Odoo 插件配置管理器（多用户版）
+ *
  * 负责 Odoo 连接配置的持久化存储和加载
+ * 支持按 agentId 隔离，每个用户独立配置
+ *
+ * ⚠️ 当前版本使用明文存储，后续升级为 SecretInput 机制
+ * TODO: 升级为 secretRef 加密存储（env/file/exec）
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -19,7 +23,7 @@ export class ConfigManager {
   }
 
   /**
-   * 加载配置
+   * 加载完整配置
    */
   load(): OdooPluginConfig | null {
     try {
@@ -35,7 +39,7 @@ export class ConfigManager {
   }
 
   /**
-   * 保存配置
+   * 保存完整配置
    */
   save(config: OdooPluginConfig): boolean {
     try {
@@ -53,20 +57,42 @@ export class ConfigManager {
   }
 
   /**
-   * 获取 Odoo 配置
+   * 获取指定用户的 Odoo 配置
    */
-  getOdooConfig(): OdooConfig | null {
+  getOdooConfig(agentId: string): OdooConfig | null {
     const config = this.load();
-    return config?.odoo || null;
+    return config?.users?.[agentId]?.odoo ?? null;
   }
 
   /**
-   * 保存 Odoo 配置
+   * 保存指定用户的 Odoo 配置
    */
-  saveOdooConfig(odooConfig: OdooConfig): boolean {
-    const config = this.load() || {};
-    config.odoo = odooConfig;
+  saveOdooConfig(agentId: string, odooConfig: OdooConfig): boolean {
+    const config = this.load() || { users: {} };
+    if (!config.users) {
+      config.users = {};
+    }
+    config.users[agentId] = {
+      agentId,
+      odoo: odooConfig,
+      configuredAt: Date.now(),
+    };
     return this.save(config);
+  }
+
+  /**
+   * 获取所有已配置的用户列表
+   */
+  listConfiguredUsers(): string[] {
+    const config = this.load();
+    return config?.users ? Object.keys(config.users) : [];
+  }
+
+  /**
+   * 检查指定用户是否已配置
+   */
+  hasUserConfig(agentId: string): boolean {
+    return this.getOdooConfig(agentId) !== null;
   }
 
   /**
@@ -91,7 +117,19 @@ export class ConfigManager {
   }
 
   /**
-   * 清除配置
+   * 清除指定用户的配置
+   */
+  clearUserConfig(agentId: string): boolean {
+    const config = this.load();
+    if (!config?.users?.[agentId]) {
+      return false;
+    }
+    delete config.users[agentId];
+    return this.save(config);
+  }
+
+  /**
+   * 清除所有配置
    */
   clear(): boolean {
     try {
